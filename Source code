@@ -1,0 +1,150 @@
+import customtkinter as ctk
+import win32gui, win32api, win32con
+import threading
+import time
+import winsound
+import keyboard
+import pydirectinput
+import random
+
+# --- SETTINGS ---
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+class MikotoMaster(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Mikoto Ultimate v5.2")
+        self.geometry("500x950")
+        self.attributes('-topmost', True) 
+        
+        self.running = False
+        self.paused = False
+        self.hwnd = None
+        self.mode = None 
+        self.last_direction = "left" 
+        self.cycle_count = 0 
+
+        # --- UI ELEMENTS ---
+        self.label = ctk.CTkLabel(self, text="Mikoto Ultimate v5.2", font=("Arial", 22, "bold"))
+        self.label.pack(pady=10)
+        
+        self.timer_label = ctk.CTkLabel(self, text="00:00", font=("Arial", 50, "bold"), text_color="#03DAC6")
+        self.timer_label.pack(pady=5)
+
+        self.status = ctk.CTkLabel(self, text="F1 TO LOCK GAME WINDOW", text_color="orange", font=("Arial", 14, "bold"))
+        self.status.pack(pady=5)
+
+        # PET CONFIG
+        self.pet_frame = ctk.CTkFrame(self)
+        self.pet_frame.pack(pady=10, padx=20, fill="x")
+        ctk.CTkLabel(self.pet_frame, text="PET FOOD KEY (Default: PGUP)").pack()
+        self.pet_key_var = ctk.StringVar(value="pgup")
+        self.pet_key_menu = ctk.CTkOptionMenu(self.pet_frame, values=["pgup", "pgdn", "9", "0"], variable=self.pet_key_var)
+        self.pet_key_menu.pack(pady=5)
+
+        # MAIN CONTROLS
+        self.start_monitored_btn = ctk.CTkButton(self, text="MONITORED (Background/4s)", command=lambda: self.start_bot("Monitored"), state="disabled", fg_color="#4CAF50")
+        self.start_monitored_btn.pack(pady=5, padx=40, fill="x")
+
+        self.start_auto_btn = ctk.CTkButton(self, text="AUTO/SLEEP (Active/0.5s)", command=lambda: self.start_bot("Auto"), state="disabled", fg_color="#6200EE")
+        self.start_auto_btn.pack(pady=5, padx=40, fill="x")
+
+        self.reset_btn = ctk.CTkButton(self, text="EMERGENCY RESET (ESC)", command=self.emergency_reset, fg_color="red")
+        self.reset_btn.pack(pady=20, padx=40, fill="x")
+
+        # BACKGROUND LISTENERS
+        threading.Thread(target=self.lock_listener, daemon=True).start()
+        threading.Thread(target=self.esc_listener, daemon=True).start()
+
+    def emergency_reset(self):
+        self.running = False
+        self.paused = False
+        for key in ['left', 'right', 'space', '1', '2', 'pgup']: pydirectinput.keyUp(key)
+        self.status.configure(text="ALL INPUTS KILLED", text_color="cyan")
+
+    def lock_listener(self):
+        while True:
+            if keyboard.is_pressed('f1'):
+                target = win32gui.GetForegroundWindow()
+                title = win32gui.GetWindowText(target)
+                if any(x in title for x in ["Maple", "VirtualBox", "Windows 10"]):
+                    self.hwnd = target
+                    self.status.configure(text=f"LOCKED: {title[:15]}...", text_color="#4CAF50")
+                    self.start_monitored_btn.configure(state="normal")
+                    self.start_auto_btn.configure(state="normal")
+                    winsound.Beep(1000, 200)
+            time.sleep(0.1)
+
+    def esc_listener(self):
+        while True:
+            if keyboard.is_pressed('esc'): self.emergency_reset()
+            time.sleep(0.1)
+
+    def start_bot(self, mode):
+        if not self.running and self.hwnd:
+            self.mode = mode
+            self.running = True
+            threading.Thread(target=self.bot_brain, daemon=True).start()
+
+    def bot_brain(self):
+        # 5s Startup countdown
+        for i in range(5, 0, -1):
+            if not self.running: return
+            self.status.configure(text=f"STARTING IN: {i}s")
+            time.sleep(1)
+
+        key_map = {"pgup": {"direct": "pgup", "vk": 0x21}, "pgdn": {"direct": "pgdn", "vk": 0x22}, "9": {"direct": "9", "vk": 0x39}, "0": {"direct": "0", "vk": 0x30}}
+        
+        while self.running:
+            selected = self.pet_key_var.get()
+            p_direct = key_map[selected]["direct"]
+            p_vk = key_map[selected]["vk"]
+
+            # --- 1. PET FEEDING (Every 20 Mins / 4 Cycles) ---
+            if self.cycle_count >= 4:
+                self.status.configure(text="FEEDING PET (PAGE UP x5)", text_color="#E91E63")
+                for _ in range(5):
+                    if self.mode == "Auto": pydirectinput.press(p_direct)
+                    else: 
+                        win32api.PostMessage(self.hwnd, win32con.WM_KEYDOWN, p_vk, 0)
+                        time.sleep(0.05)
+                        win32api.PostMessage(self.hwnd, win32con.WM_KEYUP, p_vk, 0)
+                    time.sleep(0.15)
+                self.cycle_count = 0
+                time.sleep(1)
+
+            # --- 2. ANCHOR WALK ---
+            walk_time = 4.0 if self.mode == "Monitored" else 0.5 
+            direction = "right" if self.last_direction == "left" else "left"
+            self.last_direction = direction
+            self.status.configure(text=f"ANCHORING {direction.upper()}")
+            
+            if self.mode == "Auto":
+                pydirectinput.keyDown(direction); time.sleep(walk_time); pydirectinput.keyUp(direction)
+                pydirectinput.press('1'); time.sleep(2.5); pydirectinput.press('2'); time.sleep(2.5)
+            else:
+                vk = 0x27 if direction == "right" else 0x25
+                start_w = time.time()
+                while time.time() - start_w < walk_time: 
+                    win32api.PostMessage(self.hwnd, win32con.WM_KEYDOWN, vk, 0); time.sleep(0.05)
+                win32api.PostMessage(self.hwnd, win32con.WM_KEYUP, vk, 0)
+
+            # --- 3. 5-MINUTE GRIND ---
+            start_grind = time.time()
+            while (time.time() - start_grind) < 300:
+                if not self.running: break
+                self.timer_label.configure(text=time.strftime('%M:%S', time.gmtime(300 - (time.time() - start_grind))))
+                
+                if self.mode == "Auto": pydirectinput.press('space')
+                else: win32api.PostMessage(self.hwnd, win32con.WM_KEYDOWN, 0x20, 0)
+                
+                time.sleep(random.uniform(9.9, 10.3))
+
+            self.cycle_count += 1
+            self.status.configure(text="BREAK (30s)", text_color="yellow")
+            time.sleep(30)
+
+if __name__ == "__main__":
+    app = MikotoMaster()
+    app.mainloop()
